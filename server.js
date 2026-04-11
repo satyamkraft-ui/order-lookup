@@ -3,7 +3,7 @@ const app = express();
 const port = process.env.PORT || 3000;
 
 // How many orders to scan at most
-const MAX_ORDERS_TO_SCAN = 10000;
+const MAX_ORDERS_TO_SCAN = 5000;
 // Shopify allows paginated fetching; keep one page moderate
 const PAGE_SIZE = 100;
 
