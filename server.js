@@ -44,10 +44,9 @@ app.get("/", async (req, res) => {
   }
 
   try {
-    // 🔥 Fetch orders using pagination
     const allOrders = await fetchOrdersWithPagination(MAX_ORDERS_TO_SCAN);
 
-    // 🔥 MATCH PHONE FROM ALL POSSIBLE FIELDS
+    // Match phone from all possible fields
     const matchedOrders = allOrders.filter(order => {
       const orderPhone = normalizePhone(
         order.phone ||
@@ -56,26 +55,21 @@ app.get("/", async (req, res) => {
         order.billingAddress?.phone ||
         ""
       );
-
       return orderPhone === phone;
     });
 
-    // 🔥 FILTER ACTIVE (NOT DELIVERED)
+    // Filter active (not delivered/fulfilled) — fixed: exact match only
+    const COMPLETED_STATUSES = ["fulfilled", "delivered"];
     const activeOrders = matchedOrders.filter(order => {
       const status = String(order.displayFulfillmentStatus || "").toLowerCase();
-
-      // treat delivered / fulfilled as completed
-      if (status.includes("delivered") || status.includes("fulfilled")) {
-        return false;
-      }
-      return true;
+      return !COMPLETED_STATUSES.includes(status);
     });
 
     if (activeOrders.length === 0) {
       return res.send(simplePage("No active order found for this mobile number."));
     }
 
-    // 🔥 SINGLE ORDER
+    // Single order
     if (activeOrders.length === 1) {
       const order = activeOrders[0];
       const tracking = order.fulfillments?.[0]?.trackingInfo?.[0] || {};
@@ -109,7 +103,7 @@ app.get("/", async (req, res) => {
       `);
     }
 
-    // 🔥 MULTIPLE ORDERS
+    // Multiple orders
     const items = activeOrders.map(order => `
       <div class="card">
         <p><strong>Order No:</strong> ${order.name}</p>
@@ -129,7 +123,7 @@ app.get("/", async (req, res) => {
         </style>
       </head>
       <body>
-        <h2>Select your order</h2>
+        <h2>Your active orders</h2>
         ${items}
       </body>
       </html>
@@ -141,7 +135,7 @@ app.get("/", async (req, res) => {
   }
 });
 
-// 🔧 HELPERS
+// Helpers
 
 function normalizePhone(phone) {
   return String(phone || "").replace(/\D/g, "").slice(-10);
@@ -159,16 +153,16 @@ function formatDate(dateStr) {
 function simplePage(message) {
   return `
     <html>
-    <body style="font-family:Arial; max-width:700px; margin:40px auto;">
+    <body style="font-family:Arial; max-width:700px; margin:40px auto; padding:20px;">
       <h2>Know your order no</h2>
       <p>${message}</p>
-      <a href="/">Go back</a>
+      <a href="/">← Go back</a>
     </body>
     </html>
   `;
 }
 
-// 🔥 PAGINATION FUNCTION
+// Pagination
 
 async function fetchOrdersWithPagination(maxOrders) {
   let orders = [];
@@ -190,7 +184,7 @@ async function fetchOrdersWithPagination(maxOrders) {
   return orders.slice(0, maxOrders);
 }
 
-// 🔥 SHOPIFY GRAPHQL
+// Shopify GraphQL
 
 async function shopifyGraphQL(afterCursor) {
   const query = `
@@ -213,7 +207,7 @@ async function shopifyGraphQL(afterCursor) {
               phone
             }
             fulfillments(first: 10) {
-              trackingInfo {
+              trackingInfo(first: 5) {
                 company
                 number
                 url
