@@ -2,7 +2,6 @@ const express = require("express");
 const app = express();
 const port = process.env.PORT || 3000;
 
-// 🔥 You can change this if needed
 const MAX_ORDERS_TO_SCAN = 3000;
 const PAGE_SIZE = 100;
 
