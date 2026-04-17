@@ -4,6 +4,51 @@ const port = process.env.PORT || 3000;
 
 const PAGE_SIZE = 100;
 
+// Courier tracking links
+const COURIER_LINKS = {
+  "delhivery":        "https://www.delhivery.com/tracking",
+  "dtdc":             "https://www.dtdc.in/trace.asp",
+  "mark":             "https://markexpress.co.in/",
+  "tirupati courier": "https://shorturl.at/jHTW3",
+  "trackon":          "https://trackon.in/",
+  "bluedart":         "https://www.bluedart.com/tracking",
+  "xpressbees":       "https://www.xpressbees.com/track/",
+  "nandan courier":   "https://www.shreenandan.com/",
+  "franch express":   "https://www.franchexpress.com/",
+  "mahavir":          "https://shorturl.at/zBLKr",
+  "ecom express":     "https://ecomexpress.in/tracking/",
+  "shree maruti":     "https://shorturl.at/zBLKr",
+  "ekart":            "https://ekartlogistics.com/",
+  "anjani":           "http://www.shreeanjanicourier.com/",
+  "shadowfax":        "https://www.shadowfax.in/track-order",
+  "india post":       "https://www.indiapost.gov.in/_layouts/15/dop.portal.tracking/trackconsignment.aspx",
+  "st courier":       "https://stcourier.com/"
+};
+
+function getTrackingLink(company, shopifyUrl) {
+  if (!company) return "-";
+
+  const key = company.trim().toLowerCase();
+
+  // Amazon (but NOT "amazon shipping") → use Shopify-provided URL
+  if (key === "amazon" && shopifyUrl) {
+    return `<a href="${shopifyUrl}" target="_blank">Track shipment</a>`;
+  }
+
+  // Check courier map
+  const mapped = COURIER_LINKS[key];
+  if (mapped) {
+    return `<a href="${mapped}" target="_blank">Track shipment</a>`;
+  }
+
+  // Fallback: use Shopify URL if available
+  if (shopifyUrl) {
+    return `<a href="${shopifyUrl}" target="_blank">Track shipment</a>`;
+  }
+
+  return "-";
+}
+
 app.get("/", async (req, res) => {
   const rawPhone = (req.query.phone || "").trim();
 
@@ -65,6 +110,7 @@ app.get("/", async (req, res) => {
     if (matchedOrders.length === 1) {
       const order = matchedOrders[0];
       const tracking = order.fulfillments?.[0]?.trackingInfo?.[0] || {};
+      const trackingLink = getTrackingLink(tracking.company, tracking.url);
 
       return res.send(`
         <html>
@@ -84,20 +130,17 @@ app.get("/", async (req, res) => {
             <p><strong>Status:</strong> ${order.displayFulfillmentStatus || "-"}</p>
             <p><strong>Courier:</strong> ${tracking.company || "-"}</p>
             <p><strong>Tracking Number:</strong> ${tracking.number || "-"}</p>
-            <p><strong>Tracking Link:</strong> ${
-              tracking.url
-                ? `<a href="${tracking.url}" target="_blank">Track shipment</a>`
-                : "-"
-            }</p>
+            <p><strong>Tracking Link:</strong> ${trackingLink}</p>
           </div>
         </body>
         </html>
       `);
     }
 
-    // Multiple orders — show all, sorted newest first
+    // Multiple orders
     const items = matchedOrders.map(order => {
       const tracking = order.fulfillments?.[0]?.trackingInfo?.[0] || {};
+      const trackingLink = getTrackingLink(tracking.company, tracking.url);
       return `
         <div class="card">
           <p><strong>Order No:</strong> ${order.name}</p>
@@ -105,11 +148,7 @@ app.get("/", async (req, res) => {
           <p><strong>Status:</strong> ${order.displayFulfillmentStatus || "-"}</p>
           <p><strong>Courier:</strong> ${tracking.company || "-"}</p>
           <p><strong>Tracking Number:</strong> ${tracking.number || "-"}</p>
-          <p><strong>Tracking Link:</strong> ${
-            tracking.url
-              ? `<a href="${tracking.url}" target="_blank">Track shipment</a>`
-              : "-"
-          }</p>
+          <p><strong>Tracking Link:</strong> ${trackingLink}</p>
         </div>
       `;
     }).join("");
@@ -164,12 +203,12 @@ function simplePage(message) {
   `;
 }
 
-// Fetch orders from last 60 days using date filter in GraphQL query
+// Fetch orders from last 60 days
 
 async function fetchOrdersLast60Days() {
   const since = new Date();
   since.setDate(since.getDate() - 60);
-  const sinceISO = since.toISOString(); // e.g. 2026-02-16T08:55:00.000Z
+  const sinceISO = since.toISOString();
 
   let orders = [];
   let hasNextPage = true;
