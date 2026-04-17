@@ -2,7 +2,6 @@ const express = require("express");
 const app = express();
 const port = process.env.PORT || 3000;
 
-const MAX_ORDERS_TO_SCAN = 3000;
 const PAGE_SIZE = 100;
 
 app.get("/", async (req, res) => {
@@ -44,7 +43,7 @@ app.get("/", async (req, res) => {
   }
 
   try {
-    const allOrders = await fetchOrdersWithPagination(MAX_ORDERS_TO_SCAN);
+    const allOrders = await fetchOrdersLast60Days();
 
     // Match phone from all possible fields
     const matchedOrders = allOrders.filter(order => {
@@ -58,20 +57,13 @@ app.get("/", async (req, res) => {
       return orderPhone === phone;
     });
 
-    // Filter active (not delivered/fulfilled) — fixed: exact match only
-    const COMPLETED_STATUSES = ["fulfilled", "delivered"];
-    const activeOrders = matchedOrders.filter(order => {
-      const status = String(order.displayFulfillmentStatus || "").toLowerCase();
-      return !COMPLETED_STATUSES.includes(status);
-    });
-
-    if (activeOrders.length === 0) {
-      return res.send(simplePage("No active order found for this mobile number."));
+    if (matchedOrders.length === 0) {
+      return res.send(simplePage("No order found for this mobile number in the last 60 days."));
     }
 
     // Single order
-    if (activeOrders.length === 1) {
-      const order = activeOrders[0];
+    if (matchedOrders.length === 1) {
+      const order = matchedOrders[0];
       const tracking = order.fulfillments?.[0]?.trackingInfo?.[0] || {};
 
       return res.send(`
@@ -103,27 +95,37 @@ app.get("/", async (req, res) => {
       `);
     }
 
-    // Multiple orders
-    const items = activeOrders.map(order => `
-      <div class="card">
-        <p><strong>Order No:</strong> ${order.name}</p>
-        <p><strong>Order Date:</strong> ${formatDate(order.processedAt)}</p>
-        <p><strong>Status:</strong> ${order.displayFulfillmentStatus || "-"}</p>
-      </div>
-    `).join("");
+    // Multiple orders — show all, sorted newest first
+    const items = matchedOrders.map(order => {
+      const tracking = order.fulfillments?.[0]?.trackingInfo?.[0] || {};
+      return `
+        <div class="card">
+          <p><strong>Order No:</strong> ${order.name}</p>
+          <p><strong>Order Date:</strong> ${formatDate(order.processedAt)}</p>
+          <p><strong>Status:</strong> ${order.displayFulfillmentStatus || "-"}</p>
+          <p><strong>Courier:</strong> ${tracking.company || "-"}</p>
+          <p><strong>Tracking Number:</strong> ${tracking.number || "-"}</p>
+          <p><strong>Tracking Link:</strong> ${
+            tracking.url
+              ? `<a href="${tracking.url}" target="_blank">Track shipment</a>`
+              : "-"
+          }</p>
+        </div>
+      `;
+    }).join("");
 
     return res.send(`
       <html>
       <head>
         <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <title>Select your order</title>
+        <title>Your orders</title>
         <style>
           body { font-family: Arial, sans-serif; max-width: 700px; margin: 40px auto; padding: 20px; }
           .card { border: 1px solid #ddd; border-radius: 12px; padding: 16px; margin-top: 12px; }
         </style>
       </head>
       <body>
-        <h2>Your active orders</h2>
+        <h2>Your orders (last 60 days)</h2>
         ${items}
       </body>
       </html>
@@ -162,15 +164,19 @@ function simplePage(message) {
   `;
 }
 
-// Pagination
+// Fetch orders from last 60 days using date filter in GraphQL query
 
-async function fetchOrdersWithPagination(maxOrders) {
+async function fetchOrdersLast60Days() {
+  const since = new Date();
+  since.setDate(since.getDate() - 60);
+  const sinceISO = since.toISOString(); // e.g. 2026-02-16T08:55:00.000Z
+
   let orders = [];
   let hasNextPage = true;
   let cursor = null;
 
-  while (hasNextPage && orders.length < maxOrders) {
-    const data = await shopifyGraphQL(cursor);
+  while (hasNextPage) {
+    const data = await shopifyGraphQL(cursor, sinceISO);
 
     const newOrders = data?.data?.orders?.edges?.map(e => e.node) || [];
     orders.push(...newOrders);
@@ -181,15 +187,15 @@ async function fetchOrdersWithPagination(maxOrders) {
     if (newOrders.length === 0) break;
   }
 
-  return orders.slice(0, maxOrders);
+  return orders;
 }
 
 // Shopify GraphQL
 
-async function shopifyGraphQL(afterCursor) {
+async function shopifyGraphQL(afterCursor, sinceISO) {
   const query = `
-    query ($first: Int!, $after: String) {
-      orders(first: $first, after: $after, sortKey: PROCESSED_AT, reverse: true) {
+    query ($first: Int!, $after: String, $query: String) {
+      orders(first: $first, after: $after, query: $query, sortKey: PROCESSED_AT, reverse: true) {
         edges {
           node {
             id
@@ -235,7 +241,8 @@ async function shopifyGraphQL(afterCursor) {
         query,
         variables: {
           first: PAGE_SIZE,
-          after: afterCursor
+          after: afterCursor,
+          query: `processed_at:>='${sinceISO}'`
         }
       })
     }
