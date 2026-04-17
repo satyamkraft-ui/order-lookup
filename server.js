@@ -20,7 +20,6 @@ const COURIER_LINKS = {
   "ekart":            "https://ekartlogistics.com/",
   "anjani":           "http://www.shreeanjanicourier.com/",
   "shadowfax":        "https://www.shadowfax.in/track-order",
-  "amazon shipping":  "https://track.amazon.in/",
   "india post":       "https://www.indiapost.gov.in/_layouts/15/dop.portal.tracking/trackconsignment.aspx",
   "st courier":       "https://stcourier.com/"
 };
@@ -41,7 +40,41 @@ function getTrackingLink(company, shopifyUrl) {
   return "-";
 }
 
-// Shared HTML shell
+// ─── IN-MEMORY CACHE ─────────────────────────────────────────────────────────
+let ordersCache = null;
+let cacheTime = null;
+const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+async function getOrders() {
+  const now = Date.now();
+  if (ordersCache && cacheTime && (now - cacheTime) < CACHE_TTL_MS) {
+    console.log("Serving from cache");
+    return ordersCache;
+  }
+  console.log("Fetching fresh orders from Shopify...");
+  ordersCache = await fetchOrdersLast60Days();
+  cacheTime = now;
+  return ordersCache;
+}
+
+// ─── WARM CACHE ON STARTUP ───────────────────────────────────────────────────
+// Pre-fetch orders when server starts so first user gets fast response
+setTimeout(() => {
+  getOrders().catch(err => console.error("Startup cache warm failed:", err));
+}, 2000);
+
+// ─── AUTO REFRESH CACHE every 5 minutes ─────────────────────────────────────
+setInterval(() => {
+  fetchOrdersLast60Days()
+    .then(orders => {
+      ordersCache = orders;
+      cacheTime = Date.now();
+      console.log(`Cache refreshed: ${orders.length} orders`);
+    })
+    .catch(err => console.error("Cache refresh failed:", err));
+}, CACHE_TTL_MS);
+
+// ─── SHARED HTML SHELL ───────────────────────────────────────────────────────
 function pageShell(title, bodyContent) {
   return `
     <html>
@@ -59,19 +92,14 @@ function pageShell(title, bodyContent) {
           min-height: 100vh;
         }
 
-        /* Header */
         .header {
           background: #fff;
           border-bottom: 3px solid #FFAB41;
           padding: 14px 20px;
           text-align: center;
         }
-        .header img {
-          max-width: 160px;
-          height: auto;
-        }
+        .header img { max-width: 160px; height: auto; }
 
-        /* Page wrapper */
         .wrapper {
           max-width: 680px;
           margin: 36px auto;
@@ -91,7 +119,6 @@ function pageShell(title, bodyContent) {
           margin-bottom: 20px;
         }
 
-        /* Search box */
         .search-box {
           background: #fff;
           border: 1px solid #e0d6c8;
@@ -112,9 +139,7 @@ function pageShell(title, bodyContent) {
           outline: none;
           transition: border-color 0.2s;
         }
-        input[type="text"]:focus {
-          border-color: #FFAB41;
-        }
+        input[type="text"]:focus { border-color: #FFAB41; }
 
         button[type="submit"] {
           background: #FFAB41;
@@ -128,12 +153,61 @@ function pageShell(title, bodyContent) {
           cursor: pointer;
           width: 100%;
           transition: background 0.2s;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 10px;
         }
-        button[type="submit"]:hover {
-          background: #e8962e;
+        button[type="submit"]:hover { background: #e8962e; }
+        button[type="submit"]:disabled {
+          background: #f0c070;
+          cursor: not-allowed;
         }
 
-        /* Order card */
+        /* Spinner inside button */
+        .btn-spinner {
+          display: none;
+          width: 18px;
+          height: 18px;
+          border: 3px solid rgba(255,255,255,0.4);
+          border-top-color: #fff;
+          border-radius: 50%;
+          animation: spin 0.7s linear infinite;
+        }
+
+        /* Full page loading overlay */
+        #loading-overlay {
+          display: none;
+          position: fixed;
+          inset: 0;
+          background: rgba(249, 245, 240, 0.85);
+          z-index: 999;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          gap: 16px;
+        }
+        #loading-overlay.active { display: flex; }
+
+        .big-spinner {
+          width: 52px;
+          height: 52px;
+          border: 5px solid #e0d6c8;
+          border-top-color: #FFAB41;
+          border-radius: 50%;
+          animation: spin 0.8s linear infinite;
+        }
+
+        .loading-text {
+          font-family: 'Lora', serif;
+          font-size: 16px;
+          color: #555;
+        }
+
+        @keyframes spin {
+          to { transform: rotate(360deg); }
+        }
+
         .card {
           background: #fff;
           border: 1px solid #e0d6c8;
@@ -146,48 +220,26 @@ function pageShell(title, bodyContent) {
         .card-row {
           display: flex;
           justify-content: space-between;
-          align-items: flex-start;
+          align-items: center;
           padding: 8px 0;
           border-bottom: 1px solid #f0ebe3;
           font-size: 14px;
         }
-        .card-row:last-child {
-          border-bottom: none;
-          padding-bottom: 0;
-        }
+        .card-row:last-child { border-bottom: none; padding-bottom: 0; }
 
-        .card-label {
-          color: #888;
-          font-weight: 500;
-          min-width: 130px;
-        }
+        .card-label { color: #888; font-weight: 500; min-width: 130px; }
+        .card-value { color: #222; text-align: right; flex: 1; }
 
-        .card-value {
-          color: #222;
-          text-align: right;
-          flex: 1;
-        }
-
-        /* Status badge */
         .badge {
           display: inline-block;
           padding: 3px 10px;
           border-radius: 20px;
           font-size: 12px;
           font-weight: 500;
-          background: #fff3e0;
-          color: #e07b00;
         }
-        .badge.fulfilled {
-          background: #e8f5e9;
-          color: #2e7d32;
-        }
-        .badge.unfulfilled {
-          background: #fff3e0;
-          color: #e07b00;
-        }
+        .badge.fulfilled { background: #e8f5e9; color: #2e7d32; }
+        .badge.unfulfilled { background: #fff3e0; color: #e07b00; }
 
-        /* Track button */
         .track-btn {
           display: inline-block;
           background: #E32C2B;
@@ -199,11 +251,8 @@ function pageShell(title, bodyContent) {
           font-weight: 500;
           transition: background 0.2s;
         }
-        .track-btn:hover {
-          background: #c0201f;
-        }
+        .track-btn:hover { background: #c0201f; }
 
-        /* Back link */
         .back-link {
           display: inline-block;
           margin-top: 20px;
@@ -212,11 +261,8 @@ function pageShell(title, bodyContent) {
           font-size: 14px;
           font-weight: 500;
         }
-        .back-link:hover {
-          text-decoration: underline;
-        }
+        .back-link:hover { text-decoration: underline; }
 
-        /* Message box */
         .message-box {
           background: #fff;
           border: 1px solid #e0d6c8;
@@ -230,12 +276,38 @@ function pageShell(title, bodyContent) {
       </style>
     </head>
     <body>
+
+      <!-- Full page loading overlay -->
+      <div id="loading-overlay">
+        <div class="big-spinner"></div>
+        <div class="loading-text">Searching your order...</div>
+      </div>
+
       <div class="header">
         <img src="https://cdn.shopify.com/s/files/1/0281/0327/8691/files/satyam-face-logo.jpg?v=1715321606" alt="Satyam Kraft" />
       </div>
+
       <div class="wrapper">
         ${bodyContent}
       </div>
+
+      <script>
+        // Show spinner on form submit
+        const form = document.querySelector("form");
+        if (form) {
+          form.addEventListener("submit", function () {
+            const overlay = document.getElementById("loading-overlay");
+            const btn = form.querySelector("button[type=submit]");
+            const spinner = form.querySelector(".btn-spinner");
+            const btnText = form.querySelector(".btn-text");
+
+            if (overlay) overlay.classList.add("active");
+            if (btn) btn.disabled = true;
+            if (spinner) spinner.style.display = "block";
+            if (btnText) btnText.textContent = "Searching...";
+          });
+        }
+      </script>
     </body>
     </html>
   `;
@@ -280,6 +352,8 @@ function orderCard(order) {
   `;
 }
 
+// ─── ROUTES ──────────────────────────────────────────────────────────────────
+
 app.get("/", async (req, res) => {
   const rawPhone = (req.query.phone || "").trim();
 
@@ -290,7 +364,10 @@ app.get("/", async (req, res) => {
       <div class="search-box">
         <form method="GET" action="/">
           <input type="text" name="phone" placeholder="Enter 10-digit mobile number" required />
-          <button type="submit">Search Order</button>
+          <button type="submit">
+            <div class="btn-spinner"></div>
+            <span class="btn-text">Search Order</span>
+          </button>
         </form>
       </div>
     `));
@@ -306,7 +383,8 @@ app.get("/", async (req, res) => {
   }
 
   try {
-    const allOrders = await fetchOrdersLast60Days();
+    // Uses cache — fast after first load
+    const allOrders = await getOrders();
 
     const matchedOrders = allOrders.filter(order => {
       const orderPhone = normalizePhone(
@@ -346,13 +424,13 @@ app.get("/", async (req, res) => {
   } catch (error) {
     console.error(error);
     return res.send(pageShell("Error", `
-      <div class="message-box">Something went wrong while checking the order. Please try again.</div>
+      <div class="message-box">Something went wrong. Please try again.</div>
       <a href="/" class="back-link">← Go back</a>
     `));
   }
 });
 
-// Helpers
+// ─── HELPERS ─────────────────────────────────────────────────────────────────
 
 function normalizePhone(phone) {
   return String(phone || "").replace(/\D/g, "").slice(-10);
@@ -367,7 +445,7 @@ function formatDate(dateStr) {
   });
 }
 
-// Fetch orders from last 60 days
+// ─── FETCH ORDERS ─────────────────────────────────────────────────────────────
 
 async function fetchOrdersLast60Days() {
   const since = new Date();
@@ -390,7 +468,7 @@ async function fetchOrdersLast60Days() {
   return orders;
 }
 
-// Shopify GraphQL
+// ─── SHOPIFY GRAPHQL ──────────────────────────────────────────────────────────
 
 async function shopifyGraphQL(afterCursor, sinceISO) {
   const query = `
@@ -453,4 +531,8 @@ async function shopifyGraphQL(afterCursor, sinceISO) {
 
 app.listen(port, () => {
   console.log("Server running on port " + port);
+  // Warm cache 2 seconds after startup
+  setTimeout(() => {
+    getOrders().catch(err => console.error("Startup cache warm failed:", err));
+  }, 2000);
 });
